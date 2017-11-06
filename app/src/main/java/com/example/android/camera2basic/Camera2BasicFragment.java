@@ -26,6 +26,8 @@ import android.content.Context;
 import android.content.DialogInterface;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.ImageFormat;
@@ -56,6 +58,7 @@ import android.os.HandlerThread;
 import android.support.annotation.NonNull;
 import android.support.v13.app.FragmentCompat;
 import android.support.v4.content.ContextCompat;
+import android.support.v4.graphics.BitmapCompat;
 import android.util.Log;
 import android.util.Size;
 import android.util.SparseIntArray;
@@ -68,6 +71,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Toast;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -254,7 +258,8 @@ public class Camera2BasicFragment extends Fragment
 
         @Override
         public void onImageAvailable(ImageReader reader) {
-            mBackgroundHandler.post(new ImageSaver(reader.acquireNextImage(), mFile));
+            int cameraSensorOrientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION);
+            mBackgroundHandler.post(new ImageSaver(reader.acquireNextImage(), mFile, faces, cameraSensorOrientation));
         }
 
     };
@@ -294,13 +299,14 @@ public class Camera2BasicFragment extends Fragment
      * A {@link CameraCaptureSession.CaptureCallback} that handles events related to JPEG capture.
      */
     Paint paint = new Paint();
+    Face[] faces;
     private CameraCaptureSession.CaptureCallback mCaptureCallback
             = new CameraCaptureSession.CaptureCallback() {
 
         private void process(CaptureResult result) {
             switch (mState) {
                 case STATE_PREVIEW: {
-                    Face[] faces = result.get(CaptureResult.STATISTICS_FACES);
+                    faces = result.get(CaptureResult.STATISTICS_FACES);
                     Canvas canvas = surfaceView.lockCanvas();
                     canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR);
                     if (faces != null && faces.length > 0) {
@@ -738,15 +744,9 @@ public class Camera2BasicFragment extends Fragment
                             // When the session is ready, we start displaying the preview.
                             mCaptureSession = cameraCaptureSession;
                             try {
-                                // Auto focus should be continuous for camera preview.
-//                                mPreviewRequestBuilder.set(CaptureRequest.CONTROL_AF_MODE,
-//                                        CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
 
                                 //set FaceDetection
                                 mPreviewRequestBuilder.set(CaptureRequest.STATISTICS_FACE_DETECT_MODE, CaptureRequest.STATISTICS_FACE_DETECT_MODE_SIMPLE);
-
-                                // Flash is automatically enabled when necessary.
-//                                setAutoFlash(mPreviewRequestBuilder);
 
                                 // Finally, we start displaying the camera preview.
                                 mPreviewRequest = mPreviewRequestBuilder.build();
@@ -812,44 +812,9 @@ public class Camera2BasicFragment extends Fragment
         captureStillPicture();
     }
 
-    /**
-     * Lock the focus as the first step for a still image capture.
-     */
-    private void lockFocus() {
-        try {
-            // This is how to tell the camera to lock focus.
-//            mPreviewRequestBuilder.set(CaptureRequest.CONTROL_AF_TRIGGER,
-//                    CameraMetadata.CONTROL_AF_TRIGGER_START);
-            // Tell #mCaptureCallback to wait for the lock.
-            mState = STATE_WAITING_LOCK;
-            mCaptureSession.capture(mPreviewRequestBuilder.build(), mCaptureCallback,
-                    mBackgroundHandler);
-        } catch (CameraAccessException e) {
-            e.printStackTrace();
-        }
-    }
-
-    /**
-     * Run the precapture sequence for capturing a still image. This method should be called when
-     * we get a response in {@link #mCaptureCallback} from {@link #lockFocus()}.
-     */
-    private void runPrecaptureSequence() {
-        try {
-            // This is how to tell the camera to trigger.
-            mPreviewRequestBuilder.set(CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER,
-                    CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_START);
-            // Tell #mCaptureCallback to wait for the precapture sequence to be set.
-            mState = STATE_WAITING_PRECAPTURE;
-            mCaptureSession.capture(mPreviewRequestBuilder.build(), mCaptureCallback,
-                    mBackgroundHandler);
-        } catch (CameraAccessException e) {
-            e.printStackTrace();
-        }
-    }
 
     /**
      * Capture a still picture. This method should be called when we get a response in
-     * {@link #mCaptureCallback} from both {@link #lockFocus()}.
      */
     private void captureStillPicture() {
         try {
@@ -861,11 +826,6 @@ public class Camera2BasicFragment extends Fragment
             final CaptureRequest.Builder captureBuilder =
                     mCameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
             captureBuilder.addTarget(mImageReader.getSurface());
-
-            // Use the same AE and AF modes as the preview.
-//            captureBuilder.set(CaptureRequest.CONTROL_AF_MODE,
-//                    CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
-//            setAutoFlash(captureBuilder);
 
             // Orientation
             int rotation = activity.getWindowManager().getDefaultDisplay().getRotation();
@@ -911,12 +871,6 @@ public class Camera2BasicFragment extends Fragment
      */
     private void unlockFocus() {
         try {
-            // Reset the auto-focus trigger
-//            mPreviewRequestBuilder.set(CaptureRequest.CONTROL_AF_TRIGGER,
-//                    CameraMetadata.CONTROL_AF_TRIGGER_CANCEL);
-//            setAutoFlash(mPreviewRequestBuilder);
-//            mCaptureSession.capture(mPreviewRequestBuilder.build(), mCaptureCallback,
-//                    mBackgroundHandler);
             // After this, the camera will go back to the normal state of preview.
             mState = STATE_PREVIEW;
             mCaptureSession.setRepeatingRequest(mPreviewRequest, mCaptureCallback,
@@ -946,12 +900,6 @@ public class Camera2BasicFragment extends Fragment
         }
     }
 
-    private void setAutoFlash(CaptureRequest.Builder requestBuilder) {
-        if (mFlashSupported) {
-            requestBuilder.set(CaptureRequest.CONTROL_AE_MODE,
-                    CaptureRequest.CONTROL_AE_MODE_ON_AUTO_FLASH);
-        }
-    }
 
     /**
      * Saves a JPEG {@link Image} into the specified {@link File}.
@@ -967,16 +915,54 @@ public class Camera2BasicFragment extends Fragment
          */
         private final File mFile;
 
-        public ImageSaver(Image image, File file) {
+        private final Face[] mFaces;
+
+        private final int mCameraSensorOrientation;
+
+        public ImageSaver(Image image, File file, Face[] faces, int cameraSensorOrientation) {
             mImage = image;
             mFile = file;
+            mFaces = faces;
+            mCameraSensorOrientation = cameraSensorOrientation;
         }
 
         @Override
         public void run() {
+
             ByteBuffer buffer = mImage.getPlanes()[0].getBuffer();
             byte[] bytes = new byte[buffer.remaining()];
             buffer.get(bytes);
+
+            if (mFaces != null && mFaces.length > 0) {
+                BitmapFactory.Options options = new BitmapFactory.Options();
+                options.inMutable = true;
+                Bitmap face = BitmapFactory.decodeByteArray(bytes, 0, bytes.length, options);
+
+                Rect bounds = mFaces[0].getBounds();
+                switch (mCameraSensorOrientation) {
+                    case 90:
+                        face = Bitmap.createBitmap(face, face.getWidth() - bounds.bottom,
+                                bounds.left,
+                                bounds.bottom - bounds.top,
+                                bounds.right - bounds.left);
+                        break;
+                    case 270:
+                        face = Bitmap.createBitmap(face, bounds.top,
+                                 face.getHeight()-bounds.right,
+                                bounds.bottom - bounds.top,
+                                bounds.right - bounds.left);
+                        break;
+                    default:
+
+                }
+                face = Bitmap.createScaledBitmap(face, 800, 800, false);
+
+                ByteArrayOutputStream stream = new ByteArrayOutputStream();
+                face.compress(Bitmap.CompressFormat.PNG, 100, stream);
+                bytes = stream.toByteArray();
+            }
+
+
             FileOutputStream output = null;
             try {
                 output = new FileOutputStream(mFile);
@@ -1075,16 +1061,10 @@ public class Camera2BasicFragment extends Fragment
     }
 
     public static class CustomFace {
-        private int score = 0;
         private Rect rect = null;
 
-        public CustomFace(Rect rect, int score) {
-            this.score = score;
+        public CustomFace(Rect rect) {
             this.rect = rect;
-        }
-
-        public int getScore() {
-            return score;
         }
 
         public Rect getBounds() {
@@ -1138,7 +1118,7 @@ public class Camera2BasicFragment extends Fragment
             }
 
 
-            mappedFacesList[i] = new CustomFace(rectFToRect(mappedRect), faces[i].getScore());
+            mappedFacesList[i] = new CustomFace(rectFToRect(mappedRect));
         }
 
         return mappedFacesList;
