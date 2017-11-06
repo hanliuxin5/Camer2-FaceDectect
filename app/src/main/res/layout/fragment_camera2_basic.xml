@@ -22,12 +22,18 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 
+    <com.example.android.camera2basic.AutoFitTextureView
+        android:id="@+id/faces"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
     <FrameLayout
         android:id="@+id/control"
         android:layout_width="match_parent"
         android:layout_height="112dp"
         android:layout_gravity="bottom"
-        android:background="@android:color/transparent">
+        android:background="@color/control_background"
+        android:visibility="visible">
 
         <Button
             android:id="@+id/picture"

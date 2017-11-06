@@ -18,6 +18,7 @@ package com.example.android.camera2basic;
 
 import android.content.Context;
 import android.util.AttributeSet;
+import android.util.Log;
 import android.view.TextureView;
 
 /**
@@ -25,8 +26,19 @@ import android.view.TextureView;
  */
 public class AutoFitTextureView extends TextureView {
 
-    private int mRatioWidth = 0;
-    private int mRatioHeight = 0;
+    private static int mRatioWidth = 0;
+    private static int mRatioHeight = 0;
+
+    public int getmRealWidth() {
+        return mRealWidth;
+    }
+
+    public int getmRealHeight() {
+        return mRealHeight;
+    }
+
+    private int mRealWidth = 0;
+    private int mRealHeight = 0;
 
     public AutoFitTextureView(Context context) {
         this(context, null);
@@ -39,6 +51,7 @@ public class AutoFitTextureView extends TextureView {
     public AutoFitTextureView(Context context, AttributeSet attrs, int defStyle) {
         super(context, attrs, defStyle);
     }
+
 
     /**
      * Sets the aspect ratio for this view. The size of the view will be measured based on the ratio
@@ -66,8 +79,12 @@ public class AutoFitTextureView extends TextureView {
             setMeasuredDimension(width, height);
         } else {
             if (width < height * mRatioWidth / mRatioHeight) {
-                setMeasuredDimension(width, width * mRatioHeight / mRatioWidth);
+                mRealWidth = width;
+                mRealHeight = width * mRatioHeight / mRatioWidth;
+                setMeasuredDimension(mRealWidth, mRealHeight);
             } else {
+                mRealWidth = height * mRatioWidth / mRatioHeight;
+                mRealHeight = height;
                 setMeasuredDimension(height * mRatioWidth / mRatioHeight, height);
             }
         }
