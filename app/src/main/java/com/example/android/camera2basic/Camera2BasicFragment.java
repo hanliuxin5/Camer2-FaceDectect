@@ -33,7 +33,6 @@ import android.graphics.Color;
 import android.graphics.ImageFormat;
 import android.graphics.Matrix;
 import android.graphics.Paint;
-import android.graphics.PixelFormat;
 import android.graphics.Point;
 import android.graphics.PorterDuff;
 import android.graphics.Rect;
@@ -44,7 +43,6 @@ import android.hardware.camera2.CameraCaptureSession;
 import android.hardware.camera2.CameraCharacteristics;
 import android.hardware.camera2.CameraDevice;
 import android.hardware.camera2.CameraManager;
-import android.hardware.camera2.CameraMetadata;
 import android.hardware.camera2.CaptureRequest;
 import android.hardware.camera2.CaptureResult;
 import android.hardware.camera2.TotalCaptureResult;
@@ -58,14 +56,11 @@ import android.os.HandlerThread;
 import android.support.annotation.NonNull;
 import android.support.v13.app.FragmentCompat;
 import android.support.v4.content.ContextCompat;
-import android.support.v4.graphics.BitmapCompat;
 import android.util.Log;
 import android.util.Size;
 import android.util.SparseIntArray;
 import android.view.LayoutInflater;
 import android.view.Surface;
-import android.view.SurfaceHolder;
-import android.view.SurfaceView;
 import android.view.TextureView;
 import android.view.View;
 import android.view.ViewGroup;
@@ -87,9 +82,6 @@ import java.util.concurrent.TimeUnit;
 public class Camera2BasicFragment extends Fragment
         implements View.OnClickListener, FragmentCompat.OnRequestPermissionsResultCallback {
 
-    /**
-     * Conversion from screen rotation to JPEG orientation.
-     */
     private static final SparseIntArray ORIENTATIONS = new SparseIntArray();
     private static final int REQUEST_CAMERA_PERMISSION = 1;
     private static final String FRAGMENT_DIALOG = "dialog";
@@ -101,104 +93,37 @@ public class Camera2BasicFragment extends Fragment
         ORIENTATIONS.append(Surface.ROTATION_270, 180);
     }
 
-    /**
-     * Tag for the {@link Log}.
-     */
     private static final String TAG = "Camera2BasicFragment";
 
-    /**
-     * Camera state: Showing camera preview.
-     */
+    private int mState = STATE_PREVIEW;
     private static final int STATE_PREVIEW = 0;
-
-    /**
-     * Camera state: Waiting for the focus to be locked.
-     */
-    private static final int STATE_WAITING_LOCK = 1;
-
-    /**
-     * Camera state: Waiting for the exposure to be precapture state.
-     */
-    private static final int STATE_WAITING_PRECAPTURE = 2;
-
-    /**
-     * Camera state: Waiting for the exposure state to be something other than precapture.
-     */
-    private static final int STATE_WAITING_NON_PRECAPTURE = 3;
-
-    /**
-     * Camera state: Picture was taken.
-     */
     private static final int STATE_PICTURE_TAKEN = 4;
 
-    /**
-     * Max preview width that is guaranteed by Camera2 API
-     */
-    private static final int MAX_PREVIEW_WIDTH = 1920;
+    private AutoFitTextureView mTextureView;
+    private AutoFitTextureView mFacesSurfaceView;
 
-    /**
-     * Max preview height that is guaranteed by Camera2 API
-     */
+    private String mCameraId;
+    private CameraCaptureSession mCaptureSession;
+    private CameraDevice mCameraDevice;
+    private CaptureRequest.Builder mPreviewRequestBuilder;
+    private CaptureRequest mPreviewRequest;
+    private CameraCharacteristics mCharacteristics;
+
+    private int mSensorOrientation;
+    private Size mPreviewSize;
+    private static final int MAX_PREVIEW_WIDTH = 1920;
     private static final int MAX_PREVIEW_HEIGHT = 1080;
 
-    /**
-     * {@link TextureView.SurfaceTextureListener} handles several lifecycle events on a
-     * {@link TextureView}.
-     */
-    private final TextureView.SurfaceTextureListener mSurfaceTextureListener
-            = new TextureView.SurfaceTextureListener() {
+    private HandlerThread mBackgroundThread;
+    private Handler mBackgroundHandler;
+    private ImageReader mImageReader;
+    private File mFile;
 
-        @Override
-        public void onSurfaceTextureAvailable(SurfaceTexture texture, int width, int height) {
-            openCamera(width, height);
-        }
+    private Semaphore mCameraOpenCloseLock = new Semaphore(1);
 
-        @Override
-        public void onSurfaceTextureSizeChanged(SurfaceTexture texture, int width, int height) {
-            configureTransform(width, height);
-        }
+    private Paint mFacePaint = new Paint();
+    private Face[] mFaces;
 
-        @Override
-        public boolean onSurfaceTextureDestroyed(SurfaceTexture texture) {
-            return true;
-        }
-
-        @Override
-        public void onSurfaceTextureUpdated(SurfaceTexture texture) {
-        }
-
-    };
-
-    /**
-     * ID of the current {@link CameraDevice}.
-     */
-    private String mCameraId;
-
-    /**
-     * An {@link AutoFitTextureView} for camera preview.
-     */
-    private AutoFitTextureView mTextureView;
-
-    private AutoFitTextureView surfaceView;
-
-    /**
-     * A {@link CameraCaptureSession } for camera preview.
-     */
-    private CameraCaptureSession mCaptureSession;
-
-    /**
-     * A reference to the opened {@link CameraDevice}.
-     */
-    private CameraDevice mCameraDevice;
-
-    /**
-     * The {@link Size} of camera preview.
-     */
-    private Size mPreviewSize;
-
-    /**
-     * {@link CameraDevice.StateCallback} is called when {@link CameraDevice} changes its state.
-     */
     private final CameraDevice.StateCallback mStateCallback = new CameraDevice.StateCallback() {
 
         @Override
@@ -229,137 +154,62 @@ public class Camera2BasicFragment extends Fragment
 
     };
 
-    /**
-     * An additional thread for running tasks that shouldn't block the UI.
-     */
-    private HandlerThread mBackgroundThread;
+    private final TextureView.SurfaceTextureListener mSurfaceTextureListener
+            = new TextureView.SurfaceTextureListener() {
 
-    /**
-     * A {@link Handler} for running tasks in the background.
-     */
-    private Handler mBackgroundHandler;
+        @Override
+        public void onSurfaceTextureAvailable(SurfaceTexture texture, int width, int height) {
+            openCamera(width, height);
+        }
 
-    /**
-     * An {@link ImageReader} that handles still image capture.
-     */
-    private ImageReader mImageReader;
+        @Override
+        public void onSurfaceTextureSizeChanged(SurfaceTexture texture, int width, int height) {
+            configureTransform(width, height);
+        }
 
-    /**
-     * This is the output file for our picture.
-     */
-    private File mFile;
+        @Override
+        public boolean onSurfaceTextureDestroyed(SurfaceTexture texture) {
+            return true;
+        }
 
-    /**
-     * This a callback object for the {@link ImageReader}. "onImageAvailable" will be called when a
-     * still image is ready to be saved.
-     */
+        @Override
+        public void onSurfaceTextureUpdated(SurfaceTexture texture) {
+        }
+
+    };
+
     private final ImageReader.OnImageAvailableListener mOnImageAvailableListener
             = new ImageReader.OnImageAvailableListener() {
 
         @Override
         public void onImageAvailable(ImageReader reader) {
-            int cameraSensorOrientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION);
-            mBackgroundHandler.post(new ImageSaver(reader.acquireNextImage(), mFile, faces, cameraSensorOrientation));
+            int cameraSensorOrientation = mCharacteristics.get(CameraCharacteristics.SENSOR_ORIENTATION);
+            mBackgroundHandler.post(new ImageSaver(reader.acquireNextImage(), mFile, mFaces, cameraSensorOrientation));
         }
 
     };
 
-    /**
-     * {@link CaptureRequest.Builder} for the camera preview
-     */
-    private CaptureRequest.Builder mPreviewRequestBuilder;
-
-    /**
-     * {@link CaptureRequest} generated by {@link #mPreviewRequestBuilder}
-     */
-    private CaptureRequest mPreviewRequest;
-
-    /**
-     * The current state of camera state for taking pictures.
-     *
-     * @see #mCaptureCallback
-     */
-    private int mState = STATE_PREVIEW;
-
-    /**
-     * A {@link Semaphore} to prevent the app from exiting before closing the camera.
-     */
-    private Semaphore mCameraOpenCloseLock = new Semaphore(1);
-
-    /**
-     * Whether the current camera device supports Flash or not.
-     */
-    private boolean mFlashSupported;
-
-    /**
-     * Orientation of the camera sensor
-     */
-    private int mSensorOrientation;
-    /**
-     * A {@link CameraCaptureSession.CaptureCallback} that handles events related to JPEG capture.
-     */
-    Paint paint = new Paint();
-    Face[] faces;
     private CameraCaptureSession.CaptureCallback mCaptureCallback
             = new CameraCaptureSession.CaptureCallback() {
 
         private void process(CaptureResult result) {
             switch (mState) {
                 case STATE_PREVIEW: {
-                    faces = result.get(CaptureResult.STATISTICS_FACES);
-                    Canvas canvas = surfaceView.lockCanvas();
+                    mFaces = result.get(CaptureResult.STATISTICS_FACES);
+                    Canvas canvas = mFacesSurfaceView.lockCanvas();
                     canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR);
-                    if (faces != null && faces.length > 0) {
-                        CustomFace[] customFaces = computeFacesFromCameraCoordinates(faces);
+                    if (mFaces != null && mFaces.length > 0) {
+                        CustomFace[] customFaces = computeFacesFromCameraCoordinates(mFaces);
                         for (CustomFace customFace : customFaces) {
                             Rect face = customFace.getBounds();
                             canvas.save();
-                            canvas.drawRect(face.left, face.top, face.right, face.bottom, paint);
+                            canvas.drawRect(face.left, face.top, face.right, face.bottom, mFacePaint);
                             canvas.restore();
                         }
                     }
-                    surfaceView.unlockCanvasAndPost(canvas);
+                    mFacesSurfaceView.unlockCanvasAndPost(canvas);
                     break;
-//                }
-//                case STATE_WAITING_LOCK: {
-//                    mState = STATE_PICTURE_TAKEN;
-//                    captureStillPicture();
-//                    Integer afState = result.get(CaptureResult.CONTROL_AF_STATE);
-//                    if (afState == null) {
-//                        captureStillPicture();
-//                    } else if (CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED == afState ||
-//                            CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED == afState) {
-//                        // CONTROL_AE_STATE can be null on some devices
-//                        Integer aeState = result.get(CaptureResult.CONTROL_AE_STATE);
-//                        if (aeState == null ||
-//                                aeState == CaptureResult.CONTROL_AE_STATE_CONVERGED) {
-//                            mState = STATE_PICTURE_TAKEN;
-//                            captureStillPicture();
-//                        } else {
-//                            runPrecaptureSequence();
-//                        }
-//                    }
-//                    break;
                 }
-//                case STATE_WAITING_PRECAPTURE: {
-//                    // CONTROL_AE_STATE can be null on some devices
-//                    Integer aeState = result.get(CaptureResult.CONTROL_AE_STATE);
-//                    if (aeState == null ||
-//                            aeState == CaptureResult.CONTROL_AE_STATE_PRECAPTURE ||
-//                            aeState == CaptureRequest.CONTROL_AE_STATE_FLASH_REQUIRED) {
-//                        mState = STATE_WAITING_NON_PRECAPTURE;
-//                    }
-//                    break;
-//                }
-//                case STATE_WAITING_NON_PRECAPTURE: {
-//                    // CONTROL_AE_STATE can be null on some devices
-//                    Integer aeState = result.get(CaptureResult.CONTROL_AE_STATE);
-//                    if (aeState == null || aeState != CaptureResult.CONTROL_AE_STATE_PRECAPTURE) {
-//                        mState = STATE_PICTURE_TAKEN;
-//                        captureStillPicture();
-//                    }
-//                    break;
-//                }
             }
         }
 
@@ -379,11 +229,6 @@ public class Camera2BasicFragment extends Fragment
 
     };
 
-    /**
-     * Shows a {@link Toast} on the UI thread.
-     *
-     * @param text The message to show
-     */
     private void showToast(final String text) {
         final Activity activity = getActivity();
         if (activity != null) {
@@ -459,15 +304,13 @@ public class Camera2BasicFragment extends Fragment
     public void onViewCreated(final View view, Bundle savedInstanceState) {
         view.findViewById(R.id.picture).setOnClickListener(this);
         view.findViewById(R.id.info).setOnClickListener(this);
-        surfaceView = view.findViewById(R.id.faces);
+        mFacesSurfaceView = view.findViewById(R.id.faces);
         mTextureView = view.findViewById(R.id.texture);
 
-//        surfaceHolder = surfaceView.getHolder();
+        mFacesSurfaceView.setOpaque(false);
 
-        surfaceView.setOpaque(false);
-//        surfaceHolder.setFormat(PixelFormat.TRANSPARENT);
-        paint.setStyle(Paint.Style.STROKE);
-        paint.setColor(Color.RED);
+        mFacePaint.setStyle(Paint.Style.STROKE);
+        mFacePaint.setColor(Color.RED);
     }
 
     @Override
@@ -521,7 +364,6 @@ public class Camera2BasicFragment extends Fragment
         }
     }
 
-    CameraCharacteristics characteristics;
 
     /**
      * Sets up member variables related to camera.
@@ -534,17 +376,15 @@ public class Camera2BasicFragment extends Fragment
         CameraManager manager = (CameraManager) activity.getSystemService(Context.CAMERA_SERVICE);
         try {
             for (String cameraId : manager.getCameraIdList()) {
-                characteristics
-                        = manager.getCameraCharacteristics(cameraId);
+                mCharacteristics = manager.getCameraCharacteristics(cameraId);
 
                 // We don't use a front facing camera in this sample.
-                Integer facing = characteristics.get(CameraCharacteristics.LENS_FACING);
+                Integer facing = mCharacteristics.get(CameraCharacteristics.LENS_FACING);
                 if (facing != null && facing == CameraCharacteristics.LENS_FACING_FRONT) {
                     continue;
                 }
 
-                StreamConfigurationMap map = characteristics.get(
-                        CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
+                StreamConfigurationMap map = mCharacteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
                 if (map == null) {
                     continue;
                 }
@@ -553,16 +393,14 @@ public class Camera2BasicFragment extends Fragment
                 Size largest = Collections.max(
                         Arrays.asList(map.getOutputSizes(ImageFormat.JPEG)),
                         new CompareSizesByArea());
-                mImageReader = ImageReader.newInstance(largest.getWidth(), largest.getHeight(),
-                        ImageFormat.JPEG, /*maxImages*/2);
-                mImageReader.setOnImageAvailableListener(
-                        mOnImageAvailableListener, mBackgroundHandler);
+                mImageReader = ImageReader.newInstance(largest.getWidth(), largest.getHeight(), ImageFormat.JPEG, /*maxImages*/2);
+                mImageReader.setOnImageAvailableListener(mOnImageAvailableListener, mBackgroundHandler);
 
                 // Find out if we need to swap dimension to get the preview size relative to sensor
                 // coordinate.
                 int displayRotation = activity.getWindowManager().getDefaultDisplay().getRotation();
                 //noinspection ConstantConditions
-                mSensorOrientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION);
+                mSensorOrientation = mCharacteristics.get(CameraCharacteristics.SENSOR_ORIENTATION);
                 boolean swappedDimensions = false;
                 switch (displayRotation) {
                     case Surface.ROTATION_0:
@@ -614,15 +452,11 @@ public class Camera2BasicFragment extends Fragment
                 int orientation = getResources().getConfiguration().orientation;
                 if (orientation == Configuration.ORIENTATION_LANDSCAPE) {
                     mTextureView.setAspectRatio(mPreviewSize.getWidth(), mPreviewSize.getHeight());
-                    surfaceView.setAspectRatio(mPreviewSize.getWidth(), mPreviewSize.getHeight());
+                    mFacesSurfaceView.setAspectRatio(mPreviewSize.getWidth(), mPreviewSize.getHeight());
                 } else {
                     mTextureView.setAspectRatio(mPreviewSize.getHeight(), mPreviewSize.getWidth());
-                    surfaceView.setAspectRatio(mPreviewSize.getHeight(), mPreviewSize.getWidth());
+                    mFacesSurfaceView.setAspectRatio(mPreviewSize.getHeight(), mPreviewSize.getWidth());
                 }
-
-                // Check if the flash is supported.
-                Boolean available = characteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE);
-                mFlashSupported = available == null ? false : available;
 
                 mCameraId = cameraId;
                 return;
@@ -762,8 +596,7 @@ public class Camera2BasicFragment extends Fragment
                                 @NonNull CameraCaptureSession cameraCaptureSession) {
                             showToast("Failed");
                         }
-                    }, null
-            );
+                    }, null);
         } catch (CameraAccessException e) {
             e.printStackTrace();
         }
@@ -800,14 +633,13 @@ public class Camera2BasicFragment extends Fragment
             matrix.postRotate(180, centerX, centerY);
         }
         mTextureView.setTransform(matrix);
-        surfaceView.setTransform(matrix);
+        mFacesSurfaceView.setTransform(matrix);
     }
 
     /**
      * Initiate a still image capture.
      */
     private void takePicture() {
-//        lockFocus();
         mState = STATE_PICTURE_TAKEN;
         captureStillPicture();
     }
@@ -919,6 +751,8 @@ public class Camera2BasicFragment extends Fragment
 
         private final int mCameraSensorOrientation;
 
+        private final int FacePadding = 284;
+
         public ImageSaver(Image image, File file, Face[] faces, int cameraSensorOrientation) {
             mImage = image;
             mFile = file;
@@ -941,16 +775,16 @@ public class Camera2BasicFragment extends Fragment
                 Rect bounds = mFaces[0].getBounds();
                 switch (mCameraSensorOrientation) {
                     case 90:
-                        face = Bitmap.createBitmap(face, face.getWidth() - bounds.bottom,
-                                bounds.left,
-                                bounds.bottom - bounds.top,
-                                bounds.right - bounds.left);
+                        face = Bitmap.createBitmap(face, face.getWidth() - bounds.bottom - FacePadding,
+                                bounds.left - FacePadding,
+                                bounds.bottom - bounds.top + FacePadding * 2,
+                                bounds.right - bounds.left + FacePadding * 2);
                         break;
                     case 270:
-                        face = Bitmap.createBitmap(face, bounds.top,
-                                 face.getHeight()-bounds.right,
-                                bounds.bottom - bounds.top,
-                                bounds.right - bounds.left);
+                        face = Bitmap.createBitmap(face, bounds.top - FacePadding,
+                                face.getHeight() - bounds.right - FacePadding,
+                                bounds.bottom - bounds.top + FacePadding * 2,
+                                bounds.right - bounds.left + FacePadding * 2);
                         break;
                     default:
 
@@ -1083,7 +917,7 @@ public class Camera2BasicFragment extends Fragment
     private CustomFace[] computeFacesFromCameraCoordinates(Face[] faces) {
         CustomFace[] mappedFacesList = new CustomFace[faces.length];
 
-        Rect mPreviewRect = characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE);
+        Rect mPreviewRect = mCharacteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE);
 
         for (int i = 0; i < faces.length; i++) {
 
@@ -1097,10 +931,10 @@ public class Camera2BasicFragment extends Fragment
             Rect auxRect = new Rect(rectFToRect(mappedRect));
 
 
-            int cameraSensorOrientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION);
+            int cameraSensorOrientation = mCharacteristics.get(CameraCharacteristics.SENSOR_ORIENTATION);
 
-            float x = (mPreviewRect.bottom - mPreviewRect.top) / (float) surfaceView.getmRealWidth();
-            float y = (mPreviewRect.right - mPreviewRect.left) / (float) surfaceView.getmRealHeight();
+            float x = (mPreviewRect.bottom - mPreviewRect.top) / (float) mFacesSurfaceView.getmRealWidth();
+            float y = (mPreviewRect.right - mPreviewRect.left) / (float) mFacesSurfaceView.getmRealHeight();
 
             switch (cameraSensorOrientation) {
                 case 90:
