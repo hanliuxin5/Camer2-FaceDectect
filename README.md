@@ -1,0 +1,6 @@
+# Camer2-FaceDectect
+在官方的Camera2的sample上进行的一点功能实验
+
+使用camera2的api进行功能性实验
+
+在实时预览的界面中能够以红色边框标识出人脸，按下“PICTRUE”键可以抓取检测到的第一张人脸范围的照片
