@@ -99,7 +99,7 @@ public class Camera2BasicFragment extends Fragment
     private static final int STATE_PREVIEW = 0;
     private static final int STATE_PICTURE_TAKEN = 4;
 
-    private AutoFitTextureView mTextureView;
+    private AutoFitTextureView mPreviewSurfaceView;
     private AutoFitTextureView mFacesSurfaceView;
 
     private String mCameraId;
@@ -305,7 +305,7 @@ public class Camera2BasicFragment extends Fragment
         view.findViewById(R.id.picture).setOnClickListener(this);
         view.findViewById(R.id.info).setOnClickListener(this);
         mFacesSurfaceView = view.findViewById(R.id.faces);
-        mTextureView = view.findViewById(R.id.texture);
+        mPreviewSurfaceView = view.findViewById(R.id.texture);
 
         mFacesSurfaceView.setOpaque(false);
 
@@ -328,10 +328,10 @@ public class Camera2BasicFragment extends Fragment
         // available, and "onSurfaceTextureAvailable" will not be called. In that case, we can open
         // a camera and start preview from here (otherwise, we wait until the surface is ready in
         // the SurfaceTextureListener).
-        if (mTextureView.isAvailable()) {
-            openCamera(mTextureView.getWidth(), mTextureView.getHeight());
+        if (mPreviewSurfaceView.isAvailable()) {
+            openCamera(mPreviewSurfaceView.getWidth(), mPreviewSurfaceView.getHeight());
         } else {
-            mTextureView.setSurfaceTextureListener(mSurfaceTextureListener);
+            mPreviewSurfaceView.setSurfaceTextureListener(mSurfaceTextureListener);
         }
     }
 
@@ -451,10 +451,10 @@ public class Camera2BasicFragment extends Fragment
                 // We fit the aspect ratio of TextureView to the size of preview we picked.
                 int orientation = getResources().getConfiguration().orientation;
                 if (orientation == Configuration.ORIENTATION_LANDSCAPE) {
-                    mTextureView.setAspectRatio(mPreviewSize.getWidth(), mPreviewSize.getHeight());
+                    mPreviewSurfaceView.setAspectRatio(mPreviewSize.getWidth(), mPreviewSize.getHeight());
                     mFacesSurfaceView.setAspectRatio(mPreviewSize.getWidth(), mPreviewSize.getHeight());
                 } else {
-                    mTextureView.setAspectRatio(mPreviewSize.getHeight(), mPreviewSize.getWidth());
+                    mPreviewSurfaceView.setAspectRatio(mPreviewSize.getHeight(), mPreviewSize.getWidth());
                     mFacesSurfaceView.setAspectRatio(mPreviewSize.getHeight(), mPreviewSize.getWidth());
                 }
 
@@ -550,7 +550,7 @@ public class Camera2BasicFragment extends Fragment
      */
     private void createCameraPreviewSession() {
         try {
-            SurfaceTexture texture = mTextureView.getSurfaceTexture();
+            SurfaceTexture texture = mPreviewSurfaceView.getSurfaceTexture();
             assert texture != null;
 
             // We configure the size of default buffer to be the size of camera preview we want.
@@ -603,16 +603,16 @@ public class Camera2BasicFragment extends Fragment
     }
 
     /**
-     * Configures the necessary {@link Matrix} transformation to `mTextureView`.
+     * Configures the necessary {@link Matrix} transformation to `mPreviewSurfaceView`.
      * This method should be called after the camera preview size is determined in
-     * setUpCameraOutputs and also the size of `mTextureView` is fixed.
+     * setUpCameraOutputs and also the size of `mPreviewSurfaceView` is fixed.
      *
-     * @param viewWidth  The width of `mTextureView`
-     * @param viewHeight The height of `mTextureView`
+     * @param viewWidth  The width of `mPreviewSurfaceView`
+     * @param viewHeight The height of `mPreviewSurfaceView`
      */
     private void configureTransform(int viewWidth, int viewHeight) {
         Activity activity = getActivity();
-        if (null == mTextureView || null == mPreviewSize || null == activity) {
+        if (null == mPreviewSurfaceView || null == mPreviewSize || null == activity) {
             return;
         }
         int rotation = activity.getWindowManager().getDefaultDisplay().getRotation();
@@ -632,7 +632,7 @@ public class Camera2BasicFragment extends Fragment
         } else if (Surface.ROTATION_180 == rotation) {
             matrix.postRotate(180, centerX, centerY);
         }
-        mTextureView.setTransform(matrix);
+        mPreviewSurfaceView.setTransform(matrix);
         mFacesSurfaceView.setTransform(matrix);
     }
 
@@ -751,7 +751,6 @@ public class Camera2BasicFragment extends Fragment
 
         private final int mCameraSensorOrientation;
 
-        private final int FacePadding = 284;
 
         public ImageSaver(Image image, File file, Face[] faces, int cameraSensorOrientation) {
             mImage = image;
@@ -769,27 +768,44 @@ public class Camera2BasicFragment extends Fragment
 
             if (mFaces != null && mFaces.length > 0) {
                 BitmapFactory.Options options = new BitmapFactory.Options();
+
+                options.inJustDecodeBounds = true;
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.length, options);
+
+                int wRatio = (int) Math.ceil(options.outWidth / (float) 1080);
+                int hRatio = (int) Math.ceil(options.outHeight / (float) 1920);
+                int ratio = 1;
+                //获取采样率
+                if (wRatio > 1 && hRatio > 1) {
+                    if (wRatio > hRatio) {
+                        ratio = wRatio;
+                    } else {
+                        ratio = hRatio;
+                    }
+                }
+                options.inSampleSize = ratio;
+                options.inJustDecodeBounds = false;
                 options.inMutable = true;
+                options.inPreferredConfig = Bitmap.Config.RGB_565;
                 Bitmap face = BitmapFactory.decodeByteArray(bytes, 0, bytes.length, options);
 
                 Rect bounds = mFaces[0].getBounds();
                 switch (mCameraSensorOrientation) {
                     case 90:
-                        face = Bitmap.createBitmap(face, face.getWidth() - bounds.bottom - FacePadding,
-                                bounds.left - FacePadding,
-                                bounds.bottom - bounds.top + FacePadding * 2,
-                                bounds.right - bounds.left + FacePadding * 2);
+                        face = Bitmap.createBitmap(face, face.getWidth() - bounds.bottom / ratio,
+                                bounds.left / ratio,
+                                (bounds.bottom - bounds.top) / ratio,
+                                (bounds.right - bounds.left) / ratio);
                         break;
                     case 270:
-                        face = Bitmap.createBitmap(face, bounds.top - FacePadding,
-                                face.getHeight() - bounds.right - FacePadding,
-                                bounds.bottom - bounds.top + FacePadding * 2,
-                                bounds.right - bounds.left + FacePadding * 2);
+                        face = Bitmap.createBitmap(face, bounds.top / ratio,
+                                face.getHeight() - bounds.right / ratio,
+                                (bounds.bottom - bounds.top) / ratio,
+                                (bounds.right - bounds.left) / ratio);
                         break;
                     default:
 
                 }
-                face = Bitmap.createScaledBitmap(face, 800, 800, false);
 
                 ByteArrayOutputStream stream = new ByteArrayOutputStream();
                 face.compress(Bitmap.CompressFormat.PNG, 100, stream);
@@ -906,11 +922,11 @@ public class Camera2BasicFragment extends Fragment
         }
     }
 
-    public static RectF rectToRectF(Rect r) {
+    private static RectF rectToRectF(Rect r) {
         return new RectF(r.left, r.top, r.right, r.bottom);
     }
 
-    public static Rect rectFToRect(RectF r) {
+    private static Rect rectFToRect(RectF r) {
         return new Rect((int) r.left, (int) r.top, (int) r.right, (int) r.bottom);
     }
 
