@@ -108,6 +108,8 @@ public class Camera2BasicFragment extends Fragment
     private CaptureRequest.Builder mPreviewRequestBuilder;
     private CaptureRequest mPreviewRequest;
     private CameraCharacteristics mCharacteristics;
+    private Integer mFacing = CameraCharacteristics.LENS_FACING_FRONT;
+    private Rect mCameraRect;
 
     private int mSensorOrientation;
     private Size mPreviewSize;
@@ -184,7 +186,9 @@ public class Camera2BasicFragment extends Fragment
         @Override
         public void onImageAvailable(ImageReader reader) {
             int cameraSensorOrientation = mCharacteristics.get(CameraCharacteristics.SENSOR_ORIENTATION);
-            mBackgroundHandler.post(new ImageSaver(reader.acquireNextImage(), mFile, mFaces, cameraSensorOrientation));
+            final Face[] faces = mFaces;
+            mBackgroundHandler.post(new ImageSaver(reader.acquireNextImage(), mFile, faces,
+                    cameraSensorOrientation, mCameraRect));
         }
 
     };
@@ -380,7 +384,7 @@ public class Camera2BasicFragment extends Fragment
 
                 // We don't use a front facing camera in this sample.
                 Integer facing = mCharacteristics.get(CameraCharacteristics.LENS_FACING);
-                if (facing != null && facing == CameraCharacteristics.LENS_FACING_FRONT) {
+                if (facing != null && !facing.equals(mFacing)) {
                     continue;
                 }
 
@@ -752,11 +756,14 @@ public class Camera2BasicFragment extends Fragment
         private final int mCameraSensorOrientation;
 
 
-        public ImageSaver(Image image, File file, Face[] faces, int cameraSensorOrientation) {
+        private final Rect mCameraRect;
+
+        public ImageSaver(Image image, File file, Face[] faces, int cameraSensorOrientation, Rect cameraRect) {
             mImage = image;
             mFile = file;
             mFaces = faces;
             mCameraSensorOrientation = cameraSensorOrientation;
+            mCameraRect = cameraRect;
         }
 
         @Override
@@ -771,6 +778,7 @@ public class Camera2BasicFragment extends Fragment
 
                 options.inJustDecodeBounds = true;
                 BitmapFactory.decodeByteArray(bytes, 0, bytes.length, options);
+
 
                 int wRatio = (int) Math.ceil(options.outWidth / (float) 1080);
                 int hRatio = (int) Math.ceil(options.outHeight / (float) 1920);
@@ -789,22 +797,24 @@ public class Camera2BasicFragment extends Fragment
                 options.inPreferredConfig = Bitmap.Config.RGB_565;
                 Bitmap face = BitmapFactory.decodeByteArray(bytes, 0, bytes.length, options);
 
+
+                float x = ((mCameraRect.bottom - mCameraRect.top) / (float) face.getWidth());
+                float y = ((mCameraRect.right - mCameraRect.left) / (float) face.getHeight());
+
                 Rect bounds = mFaces[0].getBounds();
                 switch (mCameraSensorOrientation) {
                     case 90:
-                        face = Bitmap.createBitmap(face, face.getWidth() - bounds.bottom / ratio,
-                                bounds.left / ratio,
-                                (bounds.bottom - bounds.top) / ratio,
-                                (bounds.right - bounds.left) / ratio);
+                        face = Bitmap.createBitmap(face, (int) ((face.getWidth() - bounds.bottom) / y),
+                                (int) (bounds.left / x),
+                                (int) ((bounds.bottom - bounds.top) / y),
+                                (int) ((bounds.right - bounds.left) / x));
                         break;
                     case 270:
-                        face = Bitmap.createBitmap(face, bounds.top / ratio,
-                                face.getHeight() - bounds.right / ratio,
-                                (bounds.bottom - bounds.top) / ratio,
-                                (bounds.right - bounds.left) / ratio);
+                        face = Bitmap.createBitmap(face, (int) (bounds.top / x),
+                                (int) (face.getHeight() - bounds.right / y),
+                                (int) ((bounds.bottom - bounds.top) / x),
+                                (int) ((bounds.right - bounds.left) / y));
                         break;
-                    default:
-
                 }
 
                 ByteArrayOutputStream stream = new ByteArrayOutputStream();
@@ -933,7 +943,7 @@ public class Camera2BasicFragment extends Fragment
     private CustomFace[] computeFacesFromCameraCoordinates(Face[] faces) {
         CustomFace[] mappedFacesList = new CustomFace[faces.length];
 
-        Rect mPreviewRect = mCharacteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE);
+        mCameraRect = mCharacteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE);
 
         for (int i = 0; i < faces.length; i++) {
 
@@ -949,22 +959,35 @@ public class Camera2BasicFragment extends Fragment
 
             int cameraSensorOrientation = mCharacteristics.get(CameraCharacteristics.SENSOR_ORIENTATION);
 
-            float x = (mPreviewRect.bottom - mPreviewRect.top) / (float) mFacesSurfaceView.getmRealWidth();
-            float y = (mPreviewRect.right - mPreviewRect.left) / (float) mFacesSurfaceView.getmRealHeight();
+            float x = (mCameraRect.bottom - mCameraRect.top) / (float) mFacesSurfaceView.getmRealWidth();
+            float y = (mCameraRect.right - mCameraRect.left) / (float) mFacesSurfaceView.getmRealHeight();
 
-            switch (cameraSensorOrientation) {
-                case 90:
-                    mappedRect.left = (mPreviewRect.bottom - auxRect.bottom) / x;
-                    mappedRect.top = auxRect.left / y;
-                    mappedRect.right = (mPreviewRect.bottom - auxRect.top) / x;
-                    mappedRect.bottom = auxRect.right / y;
-                    break;
-                case 270:
-                    mappedRect.left = auxRect.top / x;
-                    mappedRect.top = (mPreviewRect.right - auxRect.right) / y;
-                    mappedRect.right = auxRect.bottom / x;
-                    mappedRect.bottom = (mPreviewRect.right - auxRect.left) / y;
-                    break;
+            if (mFacing == CameraCharacteristics.LENS_FACING_BACK) {
+                switch (cameraSensorOrientation) {
+                    case 90:
+                        mappedRect.left = (mCameraRect.bottom - auxRect.bottom) / x;
+                        mappedRect.top = auxRect.left / y;
+                        mappedRect.right = (mCameraRect.bottom - auxRect.top) / x;
+                        mappedRect.bottom = auxRect.right / y;
+                        break;
+                    case 270:
+                        mappedRect.left = auxRect.top / x;
+                        mappedRect.top = (mCameraRect.right - auxRect.right) / y;
+                        mappedRect.right = auxRect.bottom / x;
+                        mappedRect.bottom = (mCameraRect.right - auxRect.left) / y;
+                        break;
+                }
+            } else if (mFacing == CameraCharacteristics.LENS_FACING_FRONT) {
+                switch (cameraSensorOrientation) {
+                    case 270:
+                        mappedRect.left = (mCameraRect.bottom - auxRect.top) / x;
+                        mappedRect.top = (mCameraRect.right - auxRect.right) / y;
+                        mappedRect.right = (mCameraRect.bottom - auxRect.bottom) / x;
+                        mappedRect.bottom = (mCameraRect.right - auxRect.left) / y;
+                        break;
+                }
+            } else {
+                throw new IllegalArgumentException("not support this camera!");
             }
 
 
