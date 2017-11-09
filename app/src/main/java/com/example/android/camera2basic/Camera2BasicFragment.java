@@ -804,7 +804,7 @@ public class Camera2BasicFragment extends Fragment
                 Rect bounds = mFaces[0].getBounds();
                 switch (mCameraSensorOrientation) {
                     case 90:
-                        face = Bitmap.createBitmap(face, (int) ((face.getWidth() - bounds.bottom) / y),
+                        face = Bitmap.createBitmap(face, (int) (face.getWidth() - bounds.bottom / y),
                                 (int) (bounds.left / x),
                                 (int) ((bounds.bottom - bounds.top) / y),
                                 (int) ((bounds.right - bounds.left) / x));
